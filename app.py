@@ -180,10 +180,161 @@ def page_hopper_sizing():
         st.write(f"- **Overflow Box Projection:** {int(selected_hopper['OF Box Projection (mm)'])} mm")
 
 def page_heap_leach():
-    """Placeholder for the Heap Leach calculator."""
     st.title("Heap Leach Sizing Calculator")
-    st.info("🚧 This calculation module is currently under development. Parameters for pad area, lift height, and irrigation rates will be added here.")
-    # Add your future heap leach UI inputs and logic here.
+    st.markdown("""
+    This module uses column leaching data to predict full-scale heap leach kinetics. 
+    It determines the estimated leach cycle based on the "knee" of the extraction curve and the time required to reach the asymptotic flattened recovery.
+    """)
+    
+    # --- 1. COLUMN DATA INPUT ---
+    st.header("1. Column Test Kinetic Data")
+    st.write("Input your column testwork data below. You can paste directly from Excel.")
+    
+    # Default data mimicking the reference image
+    default_data = pd.DataFrame({
+        "Time (days)": [0, 5, 12, 20, 30, 42, 50],
+        "Au Extraction (%)": [0, 40, 66, 80, 84, 85, 85],
+        "Solution-to-Ore Ratio": [0.0, 0.25, 0.6, 1.0, 1.5, 2.1, 2.5]
+    })
+    
+    # Use data_editor to allow user modification
+    df = st.data_editor(default_data, num_rows="dynamic", use_container_width=True)
+    
+    # --- 2. COMMERCIAL PARAMETERS ---
+    st.header("2. Commercial Heap Parameters")
+    col1, col2, col3 = st.columns(3)
+    lift_height = col1.number_input("Lift Height (m)", value=10.0, step=0.5)
+    ore_sg = col2.number_input("Ore SG (Bulk Density) (t/m³)", value=1.60, step=0.05)
+    irrigation_rate = col3.number_input("Irrigation Rate (L/h/m²)", value=10.0, step=1.0)
+    
+    # --- 3. KNEE & FLATTENED POINT CALCULATION ---
+    st.header("3. Curve Analysis & Overrides")
+    
+    # Ensure data is sorted by time for calculations
+    df = df.sort_values(by="Time (days)").reset_index(drop=True)
+    
+    t_data = df["Time (days)"].values
+    au_data = df["Au Extraction (%)"].values
+    r_data = df["Solution-to-Ore Ratio"].values
+    
+    # Auto-calculate the knee using the Maximum Secant Distance method (normalized)
+    norm_t = t_data / np.max(t_data)
+    norm_au = au_data / np.max(au_data)
+    
+    # Line from first to last point
+    p1 = np.array([norm_t[0], norm_au[0]])
+    p2 = np.array([norm_t[-1], norm_au[-1]])
+    
+    max_dist = 0
+    knee_idx = 0
+    for i in range(1, len(df) - 1):
+        p3 = np.array([norm_t[i], norm_au[i]])
+        # Distance from point p3 to line p1-p2
+        dist = np.abs(np.cross(p2 - p1, p1 - p3)) / np.linalg.norm(p2 - p1)
+        if dist > max_dist:
+            max_dist = dist
+            knee_idx = i
+            
+    # Auto-calculate flattened curve (e.g., reaching 99% of max extraction)
+    max_ext = np.max(au_data)
+    flat_idx = len(df) - 1
+    for i in range(len(df)):
+        if au_data[i] >= 0.99 * max_ext:
+            flat_idx = i
+            break
+
+    auto_t1 = float(t_data[knee_idx])
+    auto_r = float(r_data[knee_idx])
+    auto_au1 = float(au_data[knee_idx])
+    
+    auto_t3 = float(t_data[flat_idx])
+    auto_au3 = float(au_data[flat_idx])
+
+    st.write("The system has estimated the curve inflection points. Modify them below if required.")
+    
+    k_col1, k_col2 = st.columns(2)
+    with k_col1:
+        st.subheader("The 'Knee'")
+        t1 = st.number_input("t₁: Time at knee (days)", value=auto_t1)
+        r_val = st.number_input("R: Sol-to-Ore Ratio at knee", value=auto_r)
+        au1 = st.number_input("Au Extraction at knee (%)", value=auto_au1)
+
+    with k_col2:
+        st.subheader("The 'Flattened Curve'")
+        t3 = st.number_input("t₃: Time curve flattens (days)", value=auto_t3)
+        au3 = st.number_input("Au Extraction when flat (%)", value=auto_au3)
+
+    # --- 4. SCALEOUT CALCULATIONS ---
+    st.header("4. Estimated Leach Cycle")
+    
+    # Calculate t2: Field days to reach R
+    # Total ore mass per m2 = H * rho (tons)
+    # Solution required to reach R = R * H * rho (tons of solution -> m3 -> 1000 L)
+    # Daily application rate = Q * 24 (L/day/m2)
+    t2 = (r_val * lift_height * ore_sg * 1000) / (irrigation_rate * 24)
+    
+    # Calculate t4: Time to flatten after the knee
+    t4 = max(0.0, t3 - t1)
+    
+    # Total cycle
+    total_cycle = t2 + t4
+    
+    res_col1, res_col2, res_col3 = st.columns(3)
+    res_col1.metric("t₂: Field Days to Knee Ratio", f"{t2:.1f} days")
+    res_col2.metric("t₄: Days to Flatten After Knee", f"{t4:.1f} days")
+    res_col3.metric("Estimated Leach Cycle (t₂ + t₄)", f"{total_cycle:.1f} days")
+
+    st.latex(r"t_2 = \frac{R \times \text{Lift Height} \times \text{Ore SG} \times 1000}{\text{Irrigation Rate} \times 24}")
+
+    # --- 5. PLOTTING ---
+    st.header("Kinetic Curve Profile")
+    
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    
+    # Plot main extraction curve
+    ax1.plot(t_data, au_data, color='#d32f2f', linewidth=2.5, label='Column Test Au Extraction')
+    ax1.set_xlabel('Time (days)', fontweight='bold')
+    ax1.set_ylabel('Au Extraction (%)', fontweight='bold')
+    ax1.set_ylim(0, 105)
+    ax1.set_xlim(0, max(t_data) * 1.1)
+    ax1.grid(True, linestyle='--', alpha=0.6)
+
+    # Setup top axis for Solution-to-Ore Ratio
+    ax2 = ax1.twiny()
+    # Assuming relatively constant irrigation in the column test, we scale the top axis linearly
+    max_t = max(t_data)
+    max_ratio_plot = np.interp(max_t, t_data, r_data) if max_t <= t_data[-1] else r_data[-1] * (max_t / t_data[-1])
+    ax2.set_xlim(0, max_ratio_plot * 1.1)
+    ax2.set_xlabel('Solution-to-Ore Ratio', fontweight='bold', color='#1976d2')
+    ax2.tick_params(axis='x', colors='#1976d2')
+
+    # Annotate Knee
+    ax1.plot(t1, au1, 'o', color='#fbc02d', markersize=8, markeredgecolor='black')
+    ax1.vlines(x=t1, ymin=0, ymax=au1, color='#1976d2', linestyle='--')
+    ax1.text(t1 - (max(t_data)*0.08), au1, "'knee'", color='#1976d2', verticalalignment='bottom')
+    ax1.text(t1, -5, r'$t_1$', color='#1976d2', horizontalalignment='center')
+    
+    # Annotate R on Top Axis (Need to convert t1 position to ax2 coords for annotation visually)
+    r_mapped_x = np.interp(t1, t_data, r_data)
+    ax2.text(r_mapped_x, 102, r'$R$', color='#1976d2', horizontalalignment='center')
+
+    # Annotate Flattened Curve
+    ax1.plot(t3, au3, 'o', color='#fbc02d', markersize=8, markeredgecolor='black')
+    ax1.vlines(x=t3, ymin=0, ymax=au3, color='#1976d2', linestyle='--')
+    ax1.text(t3, au3 + 3, "Flattened curve", color='#1976d2', horizontalalignment='center')
+    ax1.text(t3, -5, r'$t_3$', color='#1976d2', horizontalalignment='center')
+
+    # Add descriptive text below plot
+    plt_text = (
+        f"Based on R={r_val:.2f}, lift height of {lift_height} m, bulk density of {ore_sg} t/m³, and solution application rate of {irrigation_rate} L/h/m²:\n"
+        f"$t_2$ = {t2:.1f} days\n"
+        f"$t_4$ = $t_3$ - $t_1$ = {t3:.1f} - {t1:.1f} = {t4:.1f} days\n\n"
+        f"Therefore, the estimated leach cycle = $t_2$ + $t_4$ = {total_cycle:.1f} days"
+    )
+    
+    fig.text(0.12, -0.05, plt_text, ha='left', va='top', fontsize=10, color='#333333', linespacing=1.5)
+    
+    st.pyplot(fig, clear_figure=True)
 
 # --- 4. MAIN APPLICATION ROUTING ---
 def main():
