@@ -111,4 +111,100 @@ def page_hopper_sizing():
         nom_res = st.number_input("Nominal Residence Time (sec)", value=45.0) / 60
         
         st.subheader("Maximum Case")
-        max_flow = st.number_input("Max Feed Flow (m3/h)",
+        max_flow = st.number_input("Max Feed Flow (m3/h)", value=228.0)
+        max_res = st.number_input("Max Residence Time (sec)", value=30.0) / 60
+
+    # Calculations
+    _, min_live = calculate_volumes(min_flow, min_res, fvf)
+    _, nom_live = calculate_volumes(nom_flow, nom_res, fvf)
+    _, max_live = calculate_volumes(max_flow, max_res, fvf)
+    req_live_vol = max(min_live, nom_live, max_live)
+
+    shape_factor = 1.0 if shape == "Round" else (math.pi / 4)
+    lookup_vol = req_live_vol * shape_factor
+
+    try:
+        selected_hopper = df_standards[df_standards['Nominal Live Vol (m3)'] >= lookup_vol].iloc[0]
+    except IndexError:
+        st.error("Required volume exceeds standard tables. Please manually size or update the standard table.")
+        st.stop()
+
+    actual_live_vol = selected_hopper['Nominal Live Vol (m3)'] / shape_factor
+
+    # Results UI
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.subheader(f"MTO & Dimensions for: {tag}")
+        st.markdown(f"**Description:** {desc}")
+        
+        st.write("### Calculated Volumes")
+        metrics_df = pd.DataFrame({
+            "Case": ["Min", "Nominal", "Max"],
+            "Feed Flow (m3/h)": [min_flow, nom_flow, max_flow],
+            "Res Time (min)": [min_res, nom_res, max_res],
+            "Req. Live Vol (m3)": [round(min_live, 2), round(nom_live, 2), round(max_live, 2)]
+        })
+        st.dataframe(metrics_df, hide_index=True)
+        
+        st.success(f"**Design Live Volume Required:** {req_live_vol:.2f} m³")
+        st.info(f"**Selected Standard Hopper Actual Live Capacity ({shape}):** {actual_live_vol:.2f} m³")
+
+        st.write("### Geometry & MTO")
+        dim_label = "Diameter" if shape == "Round" else "Width"
+        
+        mto_col1, mto_col2 = st.columns(2)
+        mto_col1.metric(f"Overall {dim_label} (mm)", int(selected_hopper['Diameter (mm)']))
+        mto_col1.metric("Total Height (mm)", int(selected_hopper['Total Height (mm)']))
+        mto_col1.metric("Cone/Base Height (mm)", int(selected_hopper['Cone Height (mm)']))
+        
+        mto_col2.metric("Suction Nozzle Dia (mm)", int(selected_hopper['Suction Dia (mm)']))
+        mto_col2.metric(f"Base {dim_label} (mm)", int(selected_hopper['Dia Base (mm)']))
+        aspect_ratio = selected_hopper['Total Height (mm)'] / selected_hopper['Diameter (mm)']
+        mto_col2.metric("Aspect Ratio", f"{aspect_ratio:.2f} : 1")
+
+    with col2:
+        st.write("### Operating Levels & Profile")
+        cone_h_m = selected_hopper['Cone Height (mm)'] / 1000
+        cyl_to_notch_m = selected_hopper['Height Cyl to Notch (mm)'] / 1000
+        
+        hh_lvl = cone_h_m + cyl_to_notch_m
+        ll_lvl = cone_h_m 
+        
+        fig = plot_hopper(selected_hopper, shape, ll_lvl, hh_lvl)
+        st.pyplot(fig)
+        
+        st.write(f"- **HH Level (Overflow Commence):** {hh_lvl*1000:.0f} mm (from base)")
+        st.write(f"- **LL Level (Min Submergence):** {ll_lvl*1000:.0f} mm (from base)")
+        st.write(f"- **Overflow Box Depth:** {int(selected_hopper['OF Box Depth Below Notch (mm)'])} mm")
+        st.write(f"- **Overflow Box Projection:** {int(selected_hopper['OF Box Projection (mm)'])} mm")
+
+def page_heap_leach():
+    """Placeholder for the Heap Leach calculator."""
+    st.title("Heap Leach Sizing Calculator")
+    st.info("🚧 This calculation module is currently under development. Parameters for pad area, lift height, and irrigation rates will be added here.")
+    # Add your future heap leach UI inputs and logic here.
+
+# --- 4. MAIN APPLICATION ROUTING ---
+def main():
+    st.sidebar.title("Navigation")
+    
+    # Use a selectbox for clean navigation
+    app_mode = st.sidebar.selectbox(
+        "Choose a module:",
+        ["Home", "Pump Hopper Sizing", "Heap Leach Sizing (WIP)"]
+    )
+    
+    st.sidebar.markdown("---")
+
+    # Route to the appropriate function based on selection
+    if app_mode == "Home":
+        page_home()
+    elif app_mode == "Pump Hopper Sizing":
+        page_hopper_sizing()
+    elif app_mode == "Heap Leach Sizing (WIP)":
+        page_heap_leach()
+
+# Execution entry point
+if __name__ == "__main__":
+    main()
